@@ -49,10 +49,14 @@ CREATE TABLE IF NOT EXISTS promote_events (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   release_id INTEGER NOT NULL,
   from_env_id INTEGER,
-  to_env_id INTEGER NOT NULL,
+  to_env_id INTEGER,
   decision TEXT NOT NULL CHECK(decision IN ('放行','拒绝')),
   created_at TEXT NOT NULL,
   note TEXT NOT NULL DEFAULT '',
+  seq INTEGER NOT NULL DEFAULT 0,
+  cross_env INTEGER NOT NULL DEFAULT 0,
+  skipped_envs TEXT NOT NULL DEFAULT '',
+  reason_code TEXT NOT NULL DEFAULT '',
   FOREIGN KEY(release_id) REFERENCES releases(id),
   FOREIGN KEY(from_env_id) REFERENCES environments(id),
   FOREIGN KEY(to_env_id) REFERENCES environments(id)
@@ -95,7 +99,8 @@ CREATE TABLE IF NOT EXISTS audit_events (
   ref_id INTEGER,
   action TEXT NOT NULL,
   created_at TEXT NOT NULL,
-  note TEXT NOT NULL DEFAULT ''
+  note TEXT NOT NULL DEFAULT '',
+  env_code TEXT NOT NULL DEFAULT ''
 );
 """
 
@@ -107,28 +112,75 @@ WINDOW_STATUSES = ("窗开", "窗关")
 
 def connect() -> sqlite3.Connection:
     DB_PATH.parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(DB_PATH, check_same_thread=False)
+    # isolation_level=None：连接处于自动提交，事务由 db() 显式 BEGIN IMMEDIATE 控制，
+    # 让并发晋升在数据库层串行化，而不是各改各的。
+    conn = sqlite3.connect(DB_PATH, check_same_thread=False, timeout=15, isolation_level=None)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys=ON")
+    conn.execute("PRAGMA busy_timeout=15000")
     return conn
 
 
 @contextmanager
-def db():
+def db(*, immediate: bool = False):
     conn = connect()
     try:
+        conn.execute("BEGIN IMMEDIATE" if immediate else "BEGIN")
         yield conn
-        conn.commit()
+        conn.execute("COMMIT")
     except Exception:
-        conn.rollback()
+        try:
+            conn.execute("ROLLBACK")
+        except sqlite3.Error:
+            pass
         raise
     finally:
         conn.close()
 
 
+PROMOTE_EVENT_COLUMNS = {
+    "seq": "INTEGER NOT NULL DEFAULT 0",
+    "cross_env": "INTEGER NOT NULL DEFAULT 0",
+    "skipped_envs": "TEXT NOT NULL DEFAULT ''",
+    "reason_code": "TEXT NOT NULL DEFAULT ''",
+}
+
+
+def _migrate(conn: sqlite3.Connection) -> None:
+    """旧库升级：补晋升事件附加列/放开 to_env_id，并给审计补 env_code。"""
+    audit_cols = {r["name"] for r in conn.execute("PRAGMA table_info(audit_events)").fetchall()}
+    if audit_cols and "env_code" not in audit_cols:
+        conn.execute("ALTER TABLE audit_events ADD COLUMN env_code TEXT NOT NULL DEFAULT ''")
+
+    cols = {r["name"]: r for r in conn.execute("PRAGMA table_info(promote_events)").fetchall()}
+    if not cols:
+        return
+    to_env = cols.get("to_env_id")
+    missing = [c for c in PROMOTE_EVENT_COLUMNS if c not in cols]
+    needs_rebuild = bool(missing) or (to_env is not None and to_env["notnull"])
+    if not needs_rebuild:
+        return
+    conn.execute("ALTER TABLE promote_events RENAME TO promote_events_old")
+    conn.executescript(SCHEMA)
+    target_cols = [c for c in PROMOTE_EVENT_COLUMNS if c in cols]
+    copy_cols = ["id", "release_id", "from_env_id", "to_env_id", "decision", "created_at", "note"]
+    conn.execute(
+        f"""
+        INSERT INTO promote_events({', '.join(copy_cols + target_cols)})
+        SELECT {', '.join(copy_cols + target_cols)} FROM promote_events_old
+        """
+    )
+    conn.execute("DROP TABLE promote_events_old")
+
+
 def init_db() -> None:
-    with db() as conn:
+    # 初始化在进程启动时单线程执行；executescript 会隐式提交，故不套显式事务。
+    conn = connect()
+    try:
         conn.executescript(SCHEMA)
+        _migrate(conn)
+    finally:
+        conn.close()
 
 
 def row_to_dict(row: sqlite3.Row | None) -> dict | None:

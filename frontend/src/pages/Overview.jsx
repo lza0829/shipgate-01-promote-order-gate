@@ -9,6 +9,7 @@ export default function Overview() {
   if (err) return <div className="panel err">{err}</div>
   if (!data) return <div className="panel">加载中</div>
   const d = data.分布 || {}
+  const released = data.已放行 || []
   return (
     <div className="panel">
       <h2>总览</h2>
@@ -16,15 +17,39 @@ export default function Overview() {
         {Object.entries(d).map(([k, v]) => (
           <div className="stat" key={k}><div className="n">{v}</div><div className="l">{k}</div></div>
         ))}
+        <div className="stat pass"><div className="n">{data.已放行数 || 0}</div><div className="l">已放行（落产）</div></div>
       </div>
+      {data.晋升策略 && (
+        <p className="hint">晋升策略：<b>{data.晋升策略.取值}</b>（跨环事实以晋升事件与发版单落地环境为准）</p>
+      )}
       <h2>在途发版</h2>
       <div className="table-wrap">
         <table>
-          <thead><tr><th>发版单号</th><th>应用</th><th>目标版本</th><th>状态</th><th>当前环境</th><th>流水线</th></tr></thead>
+          <thead><tr><th>发版单号</th><th>应用</th><th>目标版本</th><th>状态</th><th>当前环境</th><th>下一环</th><th>流水线</th></tr></thead>
           <tbody>
             {(data.在途 || []).map((r) => (
-              <tr key={r.编号}><td>{r.发版单号}</td><td>{r.应用}</td><td>{r.目标版本}</td><td>{r.状态}</td><td>{r.当前环境 || '-'}</td><td>{r.流水线}</td></tr>
+              <tr key={r.编号}>
+                <td>{r.发版单号}</td><td>{r.应用}</td><td>{r.目标版本}</td><td>{r.状态}</td>
+                <td>{r.当前环境 || '-'}</td><td>{r.下一环 || '-'}</td><td>{r.流水线}</td>
+              </tr>
             ))}
+          </tbody>
+        </table>
+      </div>
+      <h2>已放行</h2>
+      <div className="table-wrap">
+        <table>
+          <thead><tr><th>发版单号</th><th>应用</th><th>目标版本</th><th>落地环境</th><th>晋升方式</th><th>放行时间</th></tr></thead>
+          <tbody>
+            {released.map((r) => (
+              <tr key={r.编号}>
+                <td>{r.发版单号}</td><td>{r.应用}</td><td>{r.目标版本}</td>
+                <td>{r.落地环境}</td>
+                <td>{r.跨环 ? <span className="tag cross">跨环落产</span> : <span className="tag">逐级</span>}</td>
+                <td>{r.放行时间}</td>
+              </tr>
+            ))}
+            {released.length === 0 && <tr><td colSpan="6">尚无已放行发版单</td></tr>}
           </tbody>
         </table>
       </div>

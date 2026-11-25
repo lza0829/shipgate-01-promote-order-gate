@@ -47,7 +47,7 @@ def seed_if_empty() -> None:
         conn.execute(
             """
             INSERT INTO settings(key, value) VALUES
-              ('允许跳级', '否'),
+              ('晋升路线', '允许跨环落产'),
               ('金丝雀默认比例', '10'),
               ('入闸须流水线绿', '是'),
               ('维护窗硬拒', '是')

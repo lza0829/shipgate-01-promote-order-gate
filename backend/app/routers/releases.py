@@ -2,6 +2,7 @@ from __future__ import annotations
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 from app.db import db, rows_to_list, row_to_dict
+from app.services.chain import events_for
 from app.services.common import (
     RELEASE_SELECT,
     assert_app_enabled,
@@ -35,8 +36,26 @@ def list_releases():
 
 @router.get("/发版单/{release_id}")
 def one_release(release_id: int):
+    """发版单详情：单、当前环境/下一环、名册三列、晋升事件一屏对读。"""
     with db() as conn:
-        return row_to_dict(get_release(conn, release_id))
+        detail = row_to_dict(get_release(conn, release_id))
+        detail["名册"] = rows_to_list(
+            conn.execute(
+                """
+                SELECT e.code AS 环境, e.name AS 环境名, e.sort_order AS 顺序,
+                       v.version AS 版本, v.updated_at AS 更新时间,
+                       CASE WHEN r.current_env_id = e.id THEN 1 ELSE 0 END AS 当前
+                FROM environments e
+                LEFT JOIN app_env_versions v
+                  ON v.env_id = e.id AND v.app_id = ?
+                JOIN releases r ON r.id = ?
+                ORDER BY e.sort_order
+                """,
+                (detail["应用编号"], release_id),
+            ).fetchall()
+        )
+        detail["晋升事件"] = rows_to_list(events_for(conn, release_id))
+        return detail
 
 
 @router.post("/发版单")
@@ -66,7 +85,7 @@ def create_release(body: ReleaseIn):
 
 @router.post("/发版单/{release_id}/入闸")
 def admit(release_id: int):
-    with db() as conn:
+    with db(immediate=True) as conn:
         r = conn.execute("SELECT * FROM releases WHERE id=?", (release_id,)).fetchone()
         if not r:
             raise HTTPException(404, "发版单不存在")

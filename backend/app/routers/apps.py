@@ -1,7 +1,7 @@
 from __future__ import annotations
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
-from app.db import db, rows_to_list
+from app.db import db
 from app.services.common import audit, now_str, set_app_env_version
 
 router = APIRouter(tags=["应用"])
@@ -15,12 +15,26 @@ class AppIn(BaseModel):
 
 @router.get("/应用")
 def list_apps():
+    """应用名册：带测/预/产三列版本戳，跨环落产时对应列必须与晋升事件一致。"""
     with db() as conn:
-        return rows_to_list(
-            conn.execute(
-                "SELECT id AS 编号, name AS 名称, owner AS 负责人, status AS 状态 FROM apps ORDER BY id"
-            ).fetchall()
-        )
+        envs = conn.execute("SELECT * FROM environments ORDER BY sort_order").fetchall()
+        rows = conn.execute(
+            "SELECT id AS 编号, name AS 名称, owner AS 负责人, status AS 状态 FROM apps ORDER BY id"
+        ).fetchall()
+        result = []
+        for row in rows:
+            item = dict(row)
+            versions = {
+                r["env_id"]: r["version"]
+                for r in conn.execute(
+                    "SELECT env_id, version FROM app_env_versions WHERE app_id=?", (row["编号"],)
+                ).fetchall()
+            }
+            for env in envs:
+                item[env["code"]] = versions.get(env["id"], "")
+            item["环境链"] = [env["code"] for env in envs]
+            result.append(item)
+        return result
 
 
 @router.post("/应用")

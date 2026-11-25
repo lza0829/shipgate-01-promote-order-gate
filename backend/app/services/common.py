@@ -7,10 +7,13 @@ def now_str() -> str:
     return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
 
-def audit(conn, kind: str, ref_id: int | None, action: str, note: str = "") -> None:
+def audit(conn, kind: str, ref_id: int | None, action: str, note: str = "", *, env_code: str = "") -> None:
     conn.execute(
-        "INSERT INTO audit_events(kind, ref_id, action, created_at, note) VALUES (?, ?, ?, ?, ?)",
-        (kind, ref_id, action, now_str(), note),
+        """
+        INSERT INTO audit_events(kind, ref_id, action, created_at, note, env_code)
+        VALUES (?, ?, ?, ?, ?, ?)
+        """,
+        (kind, ref_id, action, now_str(), note, env_code),
     )
 
 
@@ -49,6 +52,14 @@ SELECT r.id AS 编号,
        r.current_env_id AS 当前环境编号,
        e.code AS 当前环境,
        e.name AS 当前环境名,
+       (SELECT e2.code FROM environments e2
+         WHERE e2.sort_order > e.sort_order ORDER BY e2.sort_order LIMIT 1) AS 下一环,
+       CASE WHEN r.status='已放行' THEN e.code END AS 落地环境,
+       COALESCE((
+         SELECT pe.cross_env FROM promote_events pe
+          WHERE pe.release_id=r.id AND pe.decision='放行'
+          ORDER BY pe.seq DESC, pe.id DESC LIMIT 1
+       ), 0) AS 最近跨环,
        r.canary_ratio AS 金丝雀比例,
        r.note AS 备注,
        r.created_at AS 申请时间,

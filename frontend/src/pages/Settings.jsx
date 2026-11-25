@@ -3,8 +3,8 @@ import { api } from '../api'
 
 export default function Settings() {
   const [rows, setRows] = useState([])
-  const [key, setKey] = useState('允许跳级')
-  const [val, setVal] = useState('否')
+  const [key, setKey] = useState('金丝雀默认比例')
+  const [val, setVal] = useState('10')
   const [err, setErr] = useState('')
   const load = () => api('/设置').then(setRows).catch((e) => setErr(e.message))
   useEffect(() => { load() }, [])
